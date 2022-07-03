@@ -1,16 +1,28 @@
 const fs = require("fs/promises");
 const { Client } = require("discord.js");
+const { Rcon } = require("rcon-client");
+const { watchFile } = require("node:fs");
 
 require("dotenv").config();
 const client = new Client({
   intents: ["GUILDS", "GUILD_MESSAGES", "DIRECT_MESSAGES"],
 });
+let rcon;
 let channel;
 let chatLogs = [];
 
+const initRCON = async () => {
+  rcon = await Rcon.connect({
+    host: `${process.env.RCONHOST}`,
+    port: `${process.env.RCONPORT}`,
+    password: `${process.env.RCONPASSWORD}`,
+  });
+  return;
+};
+
 const checkHistory = async (logToCheck) => {
   console.log("checking history");
-  let messageToCheck = `${logToCheck.userName}: ${logToCheck.message}`;
+  let messageToCheck = `${logToCheck.hours}:${logToCheck.minutes}:${logToCheck.seconds} ${logToCheck.userName}: ${logToCheck.sentence}`;
 
   let count = 0;
   if (channel === undefined) {
@@ -22,23 +34,8 @@ const checkHistory = async (logToCheck) => {
     return true;
   }
   console.log(`Received ${messages.size} messages`);
-  //Iterate through the messages here with the variable "messages".
   messages.forEach((message) => {
-    let discordMessageTimestamp = new Date(message.createdTimestamp);
-    discordMessageTimestamp.setMilliseconds(0);
-    let minecraftLogTimestamp = new Date();
-    minecraftLogTimestamp.setHours(
-      logToCheck.hours,
-      logToCheck.minutes,
-      logToCheck.seconds,
-      0
-    );
-
-    if (
-      minecraftLogTimestamp === discordMessageTimestamp &&
-      message.content === messageToCheck
-    ) {
-      console.log("found: " + messageToCheck);
+    if (message.content === messageToCheck) {
       count++;
     }
   });
@@ -53,6 +50,8 @@ const checkHistory = async (logToCheck) => {
 };
 
 client.on("ready", async () => {
+  await initRCON();
+
   channel = client.channels.cache.get(`${process.env.CHANNELID}`);
   console.log(
     "Ready to begin! Serving in " +
@@ -61,6 +60,23 @@ client.on("ready", async () => {
   );
   await checkLog();
   LogsToDiscord();
+
+  watchFile(`${process.env.LOGPATH}`, async (event, filename) => {
+    await checkLog();
+    LogsToDiscord();
+  });
+});
+
+client.on("messageCreate", async (msg) => {
+  if (msg.author.bot === false) {
+    let responses = await Promise.all([
+      rcon.send(`say ${msg.member.user.tag}: ${msg.content}`),
+    ]);
+
+    for (response of responses) {
+      console.log(response);
+    }
+  }
 });
 
 client.on("disconnected", function () {
@@ -68,6 +84,7 @@ client.on("disconnected", function () {
   console.log("Disconnected!");
 
   // exit node.js with an error
+  rcon.end();
   process.exit(1);
 });
 
@@ -78,7 +95,7 @@ const parseLine = (line) => {
   let hours;
   let minutes;
   let seconds;
-  if (line.includes("<")) {
+  if (line.includes("<") && !line.includes("Rcon")) {
     parsedLine = line.split(/<|>/);
 
     time = parsedLine[0].substring(
@@ -109,6 +126,7 @@ const parseLine = (line) => {
 const checkLog = async () => {
   try {
     chatLogs = [];
+
     const data = await fs.readFile(`${process.env.LOGPATH}`, {
       encoding: "utf8",
     });
@@ -130,9 +148,11 @@ const LogsToDiscord = async () => {
   console.log("sending logs to discord");
   chatLogs.map(async (log) => {
     let historyCheck = await checkHistory(log);
-    if (!historyCheck) {
+    if (historyCheck === false) {
       console.log("successfully sent to discord");
-      //channel.send({ content: `${log.hours}:${log.minutes}:${log.seconds} ${log.userName}: ${log.sentence}` });
+      channel.send({
+        content: `${log.hours}:${log.minutes}:${log.seconds} ${log.userName}: ${log.sentence}`,
+      });
       //send to discord
     } else {
       console.log("no logs to send");
