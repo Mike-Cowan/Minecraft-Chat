@@ -62,8 +62,10 @@ client.on("ready", async () => {
   LogsToDiscord();
 
   watchFile(`${process.env.LOGPATH}`, async (event, filename) => {
-    await checkLog();
-    LogsToDiscord();
+    if (Rcon.connect === true) {
+      await checkLog();
+      LogsToDiscord();
+    }
   });
 });
 
